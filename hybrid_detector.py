@@ -11,7 +11,7 @@ from roboflow_detector import RoboflowSolarDetector
 from yolo_detector import YOLOSolarDetector
 
 class HybridSolarDetector:
-    def __init__(self, yolo_model_path="best.pt", roboflow_api_key=None, 
+    def __init__(self, yolo_model_path="yolov8x.pt", roboflow_api_key=None, 
                  confidence=0.5, device="auto", fallback_to_roboflow=True):
         """
         Initialize hybrid detector with both YOLO and Roboflow
@@ -354,7 +354,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Hybrid Solar Panel Fault Detector')
-    parser.add_argument('--yolo-model', default='best.pt', help='Path to YOLO model (.pt file)')
+    parser.add_argument('--yolo-model', default='yolov8x.pt', help='Path to YOLO model (.pt file)')
     parser.add_argument('--roboflow-key', help='Roboflow API key')
     parser.add_argument('--method', choices=['yolo', 'roboflow', 'hybrid', 'auto'], 
                        default='auto', help='Detection method to use')

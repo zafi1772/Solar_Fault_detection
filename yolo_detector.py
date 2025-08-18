@@ -13,7 +13,7 @@ import glob
 import time
 
 class YOLOSolarDetector:
-    def __init__(self, model_path="best.pt", confidence=0.5, device="auto"):
+    def __init__(self, model_path="yolov8x.pt", confidence=0.5, device="auto"):
         """
         Initialize YOLO detector for solar panel fault detection
         
@@ -34,12 +34,12 @@ class YOLOSolarDetector:
                 # Use pre-trained YOLO model as fallback
                 print(f"⚠️ Model not found at {model_path}, using pre-trained YOLOv8x (best available)")
                 try:
-                    self.model = YOLO('yolov8x.pt')
+                    self.model = YOLO('yolov8x')
                 except Exception as e:
-                    print(f"⚠️ Failed to load yolov8x.pt: {str(e)}")
+                    print(f"⚠️ Failed to load yolov8x: {str(e)}")
                     print("🔧 Trying alternative approach...")
                     # Use a different approach for compatibility
-                    self.model = YOLO('yolov8x.pt', task='detect')
+                    self.model = YOLO('yolov8x', task='detect')
             
             # Set device
             if device == "auto":
@@ -340,7 +340,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='YOLO Solar Panel Fault Detector')
-    parser.add_argument('--model', default='best.pt', help='Path to YOLO model (.pt file)')
+    parser.add_argument('--model', default='yolov8x.pt', help='Path to YOLO model (.pt file)')
     parser.add_argument('--confidence', type=float, default=0.5, help='Confidence threshold (0.0-1.0)')
     parser.add_argument('--device', default='auto', help='Device to use (cpu, cuda, or auto)')
     parser.add_argument('--folder', help='Input folder with images')

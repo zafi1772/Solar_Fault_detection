@@ -90,7 +90,7 @@ python hybrid_detector.py --test "Faulty_solar_panel/Clean/Clean (1).jpeg"
 
 ### YOLO Settings
 ```python
-# Model path (default: best.pt)
+# Model path (default: yolov8x.pt)
 yolo_model_path = "path/to/your/model.pt"
 
 # Confidence threshold (0.0-1.0)
@@ -211,10 +211,10 @@ dataset/
 yolo train data=dataset.yaml model=yolov8n.pt epochs=100
 
 # Validate model
-yolo val data=dataset.yaml model=runs/train/exp/weights/best.pt
+yolo val data=dataset.yaml model=runs/train/exp/weights/yolov8x.pt
 
 # Export model
-yolo export model=runs/train/exp/weights/best.pt format=torchscript
+yolo export model=runs/train/exp/weights/yolov8x.pt format=torchscript
 ```
 
 ## 🔄 Workflow Integration
