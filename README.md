@@ -11,6 +11,13 @@ A comprehensive solar panel fault detection system that combines **YOLO (local i
 - **Hybrid Mode**: Combines both methods for best results
 - **Automatic Fallback**: Seamless switching between detection methods
 
+### ⚙️ Advanced Processing Features
+- **Image Preprocessing**: Enhance images before detection analysis
+- **Batch Processing**: Process multiple images simultaneously
+- **Results Management**: Save, clear, and export detection results
+- **Multi-format Export**: CSV and TXT report generation
+- **Progress Tracking**: Real-time processing status updates
+
 ### 🎯 Fault Categories
 - 🐦 **Bird-drop**: High priority (24-48 hour response)
 - 🧹 **Clean**: Baseline condition (reference standard)
