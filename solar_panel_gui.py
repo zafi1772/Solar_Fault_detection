@@ -10,7 +10,8 @@ import os
 import cv2
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import threading
-from roboflow_detector import RoboflowSolarDetector
+import traceback
+import sys
 
 class SolarPanelDetectorGUI:
     def __init__(self, root):
@@ -23,6 +24,8 @@ class SolarPanelDetectorGUI:
         self.current_image_path = None
         self.current_image = None
         self.detection_results = []
+        self.canvas_width = 600  # Default canvas dimensions
+        self.canvas_height = 400
         
         # Initialize detectors
         self.detector = None
@@ -49,7 +52,9 @@ class SolarPanelDetectorGUI:
         # Try to initialize Hybrid detector
         try:
             from hybrid_detector import HybridSolarDetector
-            self.hybrid_detector = HybridSolarDetector()
+            # Pass the Roboflow API key to enable Roboflow in hybrid mode
+            roboflow_api_key = "L7zNq86EEg8nzZVQBDWK"  # Get from roboflow_detector.py
+            self.hybrid_detector = HybridSolarDetector(roboflow_api_key=roboflow_api_key)
             print("✅ Hybrid detector initialized successfully!")
         except Exception as e:
             print(f"⚠️ Hybrid detector not available: {str(e)}")
@@ -66,10 +71,22 @@ class SolarPanelDetectorGUI:
             self.detector = self.roboflow_detector
             self.detector_type = "roboflow"
         else:
-            messagebox.showerror("Error", "No detectors available! Please check your setup.")
+            print("⚠️ No detectors available! Please check your setup.")
             self.detector = None
         
         self.setup_ui()
+        
+        # Bind canvas resize event
+        self.canvas.bind('<Configure>', self.on_canvas_resize)
+        
+    def on_canvas_resize(self, event):
+        """Handle canvas resize events"""
+        if event.width > 1 and event.height > 1:
+            self.canvas_width = event.width
+            self.canvas_height = event.height
+            # Redraw image if one exists
+            if self.current_image_path:
+                self.load_and_display_image(self.current_image_path)
         
     def setup_ui(self):
         """Setup the user interface"""
@@ -159,8 +176,16 @@ class SolarPanelDetectorGUI:
         self.confidence_var = tk.DoubleVar(value=0.7)
         confidence_scale = tk.Scale(detection_frame, from_=0.1, to=1.0, 
                                    variable=self.confidence_var, orient='horizontal',
-                                   bg='#ecf0f1', length=200)
+                                   bg='#ecf0f1', length=200, resolution=0.1)
         confidence_scale.pack(padx=10)
+        
+        # Confidence value display
+        self.confidence_label = tk.Label(detection_frame, text="70%", 
+                                        font=('Arial', 9), bg='#ecf0f1', fg='#7f8c8d')
+        self.confidence_label.pack(anchor='w', padx=20, pady=2)
+        
+        # Bind confidence scale to update label
+        confidence_scale.configure(command=self.update_confidence_label)
         
         # Processing buttons frame
         processing_frame = tk.Frame(detection_frame, bg='#ecf0f1')
@@ -234,6 +259,15 @@ class SolarPanelDetectorGUI:
         self.canvas = tk.Canvas(image_frame, bg='white', highlightthickness=0)
         self.canvas.pack(fill='both', expand=True, padx=10, pady=10)
         
+        # Add placeholder text to canvas
+        self.canvas.create_text(
+            self.canvas_width // 2,
+            self.canvas_height // 2,
+            text="No image displayed\nUpload an image to begin",
+            font=('Arial', 14),
+            fill='#bdc3c7'
+        )
+        
         # Status bar
         status_frame = tk.Frame(self.root, bg='#34495e', height=30)
         status_frame.pack(fill='x', side='bottom')
@@ -253,20 +287,28 @@ class SolarPanelDetectorGUI:
                                       font=('Arial', 9), fg='#bdc3c7', bg='#34495e')
         self.detector_label.pack(side='right', padx=(0, 10), pady=5)
         
+    def update_confidence_label(self, value):
+        """Update confidence label when scale changes"""
+        try:
+            confidence_pct = float(value) * 100
+            self.confidence_label.config(text=f"{confidence_pct:.0f}%")
+        except:
+            pass
+    
     def upload_image(self):
         """Handle image upload"""
-        file_path = filedialog.askopenfilename(
-            title="Select Solar Panel Image",
-            filetypes=[
-                ("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff"),
-                ("JPEG files", "*.jpg *.jpeg"),
-                ("PNG files", "*.png"),
-                ("All files", "*.*")
-            ]
-        )
-        
-        if file_path:
-            try:
+        try:
+            file_path = filedialog.askopenfilename(
+                title="Select Solar Panel Image",
+                filetypes=[
+                    ("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff"),
+                    ("JPEG files", "*.jpg *.jpeg"),
+                    ("PNG files", "*.png"),
+                    ("All files", "*.*")
+                ]
+            )
+            
+            if file_path:
                 self.current_image_path = file_path
                 self.load_and_display_image(file_path)
                 self.file_info_label.config(text=f"📁 {os.path.basename(file_path)}")
@@ -281,84 +323,104 @@ class SolarPanelDetectorGUI:
                 self.results_text.delete(1.0, tk.END)
                 self.results_text.insert(tk.END, f"Image uploaded successfully!\nImage Type: {image_type}\nClick 'Process Image' to preprocess or 'Detect Issues' to analyze.")
                 
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to load image: {str(e)}")
-                self.status_label.config(text="Error loading image")
+        except Exception as e:
+            error_msg = f"Failed to load image: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
+            self.status_label.config(text="Error loading image")
     
     def detect_image_type(self, image_path):
         """Detect if image is thermal or regular"""
-        filename = os.path.basename(image_path).lower()
-        
-        # Check for thermal indicators in filename
-        if any(keyword in filename for keyword in ['thermal', 'infrared', 'ir', 'heat']):
-            return "🔥 Thermal Image"
-        
-        # Check for specific thermal image patterns
-        if 'solar_thermal_imaging' in filename:
-            return "🔥 Thermal Image"
-        
-        # Check file extension and size (thermal images are often larger)
         try:
-            file_size = os.path.getsize(image_path) / (1024 * 1024)  # MB
-            if file_size > 1.0:  # Larger than 1MB might be thermal
-                return "🔥 Likely Thermal Image"
-        except:
-            pass
-        
-        return "📷 Regular Photo"
+            filename = os.path.basename(image_path).lower()
+            
+            # Check for thermal indicators in filename
+            if any(keyword in filename for keyword in ['thermal', 'infrared', 'ir', 'heat']):
+                return "🔥 Thermal Image"
+            
+            # Check for specific thermal image patterns
+            if 'solar_thermal_imaging' in filename:
+                return "🔥 Thermal Image"
+            
+            # Check file extension and size (thermal images are often larger)
+            try:
+                file_size = os.path.getsize(image_path) / (1024 * 1024)  # MB
+                if file_size > 1.0:  # Larger than 1MB might be thermal
+                    return "🔥 Likely Thermal Image"
+            except:
+                pass
+            
+            return "📷 Regular Photo"
+        except Exception as e:
+            print(f"⚠️ Error detecting image type: {str(e)}")
+            return "📷 Regular Photo"
     
     def update_mode_indicator(self):
         """Update the detection mode indicator"""
-        mode = self.detection_type.get()
-        if mode == "thermal":
-            self.mode_label.config(text="Mode: 🔥 Thermal Analysis")
-        elif mode == "fault":
-            self.mode_label.config(text="Mode: ⚠️ Fault Detection")
-        else:
-            self.mode_label.config(text="Mode: 🔍 Combined Analysis")
+        try:
+            mode = self.detection_type.get()
+            if mode == "thermal":
+                self.mode_label.config(text="Mode: 🔥 Thermal Analysis")
+            elif mode == "fault":
+                self.mode_label.config(text="Mode: ⚠️ Fault Detection")
+            else:
+                self.mode_label.config(text="Mode: 🔍 Combined Analysis")
+        except Exception as e:
+            print(f"⚠️ Error updating mode indicator: {str(e)}")
     
     def update_detector_indicator(self):
         """Update the detector type indicator"""
-        detector = self.detector_type_var.get()
-        if detector == "auto":
-            self.detector_label.config(text="Detector: 🚀 Auto")
-        elif detector == "hybrid":
-            self.detector_label.config(text="Detector: 🔀 Hybrid")
-        elif detector == "yolo":
-            self.detector_label.config(text="Detector: ⚡ YOLO")
-        else:
-            self.detector_label.config(text="Detector: ☁️ Roboflow")
+        try:
+            detector = self.detector_type_var.get()
+            if detector == "auto":
+                self.detector_label.config(text="Detector: 🚀 Auto")
+            elif detector == "hybrid":
+                self.detector_label.config(text="Detector: 🔀 Hybrid")
+            elif detector == "yolo":
+                self.detector_label.config(text="Detector: ⚡ YOLO")
+            else:
+                self.detector_label.config(text="Detector: ☁️ Roboflow")
+        except Exception as e:
+            print(f"⚠️ Error updating detector indicator: {str(e)}")
     
     def load_and_display_image(self, image_path):
         """Load and display image on canvas"""
-        # Load image
-        image = Image.open(image_path)
-        
-        # Resize image to fit canvas while maintaining aspect ratio
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-        
-        if canvas_width > 1 and canvas_height > 1:  # Canvas has been drawn
-            # Calculate resize dimensions
-            img_width, img_height = image.size
-            scale = min(canvas_width / img_width, canvas_height / img_height)
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
+        try:
+            # Load image
+            image = Image.open(image_path)
             
-            # Resize image
-            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
-        # Convert to PhotoImage for tkinter
-        self.current_image = ImageTk.PhotoImage(image)
-        
-        # Display on canvas
-        self.canvas.delete("all")
-        self.canvas.create_image(
-            self.canvas.winfo_width() // 2,
-            self.canvas.winfo_height() // 2,
-            image=self.current_image,
-            anchor='center'
-        )
+            # Use stored canvas dimensions
+            canvas_width = self.canvas_width
+            canvas_height = self.canvas_height
+            
+            if canvas_width > 1 and canvas_height > 1:
+                # Calculate resize dimensions
+                img_width, img_height = image.size
+                scale = min(canvas_width / img_width, canvas_height / img_height)
+                new_width = int(img_width * scale)
+                new_height = int(img_height * scale)
+                
+                # Resize image
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Convert to PhotoImage for tkinter
+            self.current_image = ImageTk.PhotoImage(image)
+            
+            # Display on canvas
+            self.canvas.delete("all")
+            self.canvas.create_image(
+                canvas_width // 2,
+                canvas_height // 2,
+                image=self.current_image,
+                anchor='center'
+            )
+            
+        except Exception as e:
+            error_msg = f"Failed to load and display image: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
     
     def detect_issues(self):
         """Simulate detection process"""
@@ -450,8 +512,10 @@ class SolarPanelDetectorGUI:
             self.root.after(0, self.update_detection_results)
             
         except Exception as e:
-            print(f"❌ Detection error: {str(e)}")
-            self.root.after(0, lambda: self.show_detection_error(str(e)))
+            error_msg = f"Detection error: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            self.root.after(0, lambda: self.show_detection_error(error_msg))
     
     def process_roboflow_results(self, result, confidence_threshold, result_type="unknown"):
         """Process Roboflow API results into detection format"""
@@ -464,10 +528,11 @@ class SolarPanelDetectorGUI:
                 
                 for pred in predictions:
                     confidence = pred.get('confidence', 0)
-                    if confidence * 100 >= confidence_threshold:
+                    # FIXED: Use direct comparison, not multiplication by 100
+                    if confidence >= confidence_threshold:
                         # Roboflow returns center coordinates, convert to corner coordinates
                         x_center = pred.get('x', 0)
-                        y_center = pred.get('y', 0)  # Fixed: use 'y' not 'width'
+                        y_center = pred.get('y', 0)
                         width = pred.get('width', 0)
                         height = pred.get('height', 0)
                         
@@ -508,7 +573,8 @@ class SolarPanelDetectorGUI:
                     predictions = result.predictions
                     for pred in predictions:
                         confidence = getattr(pred, 'confidence', 0)
-                        if confidence * 100 >= confidence_threshold:
+                        # FIXED: Use direct comparison, not multiplication by 100
+                        if confidence >= confidence_threshold:
                             # Handle different coordinate format
                             x_center = getattr(pred, 'x', 0)
                             y_center = getattr(pred, 'y', 0)
@@ -538,47 +604,54 @@ class SolarPanelDetectorGUI:
     
     def update_detection_results(self):
         """Update GUI with detection results"""
-        # Re-enable detect button
-        self.detect_btn.config(state='normal', text="🔍 Detect Issues")
-        self.status_label.config(text="Detection completed!")
-        
-        # Enable result action buttons
-        self.save_btn.config(state='normal')
-        self.clear_btn.config(state='normal')
-        self.export_btn.config(state='normal')
-        
-        # Update results text
-        self.results_text.delete(1.0, tk.END)
-        
-        if self.detection_results:
-            # Group results by type
-            thermal_results = [d for d in self.detection_results if d.get('type') == 'thermal']
-            fault_results = [d for d in self.detection_results if d.get('type') == 'fault']
+        try:
+            # Re-enable detect button
+            self.detect_btn.config(state='normal', text="🔍 Detect Issues")
+            self.status_label.config(text="Detection completed!")
             
-            self.results_text.insert(tk.END, f"🔍 Detection Results ({len(self.detection_results)} total):\n\n")
+            # Enable result action buttons
+            self.save_btn.config(state='normal')
+            self.clear_btn.config(state='normal')
+            self.export_btn.config(state='normal')
             
-            if thermal_results:
-                self.results_text.insert(tk.END, "🔥 THERMAL ANALYSIS:\n")
-                for i, detection in enumerate(thermal_results, 1):
-                    confidence_pct = detection["confidence"] * 100
-                    self.results_text.insert(tk.END, 
-                        f"  {i}. {detection['class']}\n"
-                        f"     Confidence: {confidence_pct:.1f}%\n"
-                        f"     Location: Box {detection['bbox']}\n\n")
+            # Update results text
+            self.results_text.delete(1.0, tk.END)
             
-            if fault_results:
-                self.results_text.insert(tk.END, "⚠️ FAULT DETECTION:\n")
-                for i, detection in enumerate(fault_results, 1):
-                    confidence_pct = detection["confidence"] * 100
-                    self.results_text.insert(tk.END, 
-                        f"  {i}. {detection['class']}\n"
-                        f"     Confidence: {confidence_pct:.1f}%\n"
-                        f"     Location: Box {detection['bbox']}\n\n")
-            
-            # Draw detection boxes on image
-            self.draw_detection_boxes()
-        else:
-            self.results_text.insert(tk.END, "✅ No issues detected above confidence threshold!")
+            if self.detection_results:
+                # Group results by type
+                thermal_results = [d for d in self.detection_results if d.get('type') == 'thermal']
+                fault_results = [d for d in self.detection_results if d.get('type') == 'fault']
+                
+                self.results_text.insert(tk.END, f"🔍 Detection Results ({len(self.detection_results)} total):\n\n")
+                
+                if thermal_results:
+                    self.results_text.insert(tk.END, "🔥 THERMAL ANALYSIS:\n")
+                    for i, detection in enumerate(thermal_results, 1):
+                        confidence_pct = detection["confidence"] * 100
+                        self.results_text.insert(tk.END, 
+                            f"  {i}. {detection['class']}\n"
+                            f"     Confidence: {confidence_pct:.1f}%\n"
+                            f"     Location: Box {detection['bbox']}\n\n")
+                
+                if fault_results:
+                    self.results_text.insert(tk.END, "⚠️ FAULT DETECTION:\n")
+                    for i, detection in enumerate(fault_results, 1):
+                        confidence_pct = detection["confidence"] * 100
+                        self.results_text.insert(tk.END, 
+                            f"  {i}. {detection['class']}\n"
+                            f"     Confidence: {confidence_pct:.1f}%\n"
+                            f"     Location: Box {detection['bbox']}\n\n")
+                
+                # Draw detection boxes on image
+                self.draw_detection_boxes()
+            else:
+                self.results_text.insert(tk.END, "✅ No issues detected above confidence threshold!")
+                
+        except Exception as e:
+            error_msg = f"Error updating detection results: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
     
     def draw_detection_boxes(self):
         """Draw detection boxes on the displayed image"""
@@ -646,13 +719,19 @@ class SolarPanelDetectorGUI:
             self.status_label.config(text=f"Annotated image saved: {os.path.basename(output_path)}")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to draw detection boxes: {str(e)}")
+            error_msg = f"Failed to draw detection boxes: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
     
     def show_detection_error(self, error_msg):
         """Show detection error message"""
-        self.detect_btn.config(state='normal', text="🔍 Detect Issues")
-        self.status_label.config(text="Detection failed!")
-        messagebox.showerror("Detection Error", f"Detection failed: {error_msg}")
+        try:
+            self.detect_btn.config(state='normal', text="🔍 Detect Issues")
+            self.status_label.config(text="Detection failed!")
+            messagebox.showerror("Detection Error", f"Detection failed: {error_msg}")
+        except Exception as e:
+            print(f"❌ Error showing detection error: {str(e)}")
     
     def process_image(self):
         """Preprocess image for better detection"""
@@ -671,7 +750,10 @@ class SolarPanelDetectorGUI:
             thread.start()
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to start preprocessing: {str(e)}")
+            error_msg = f"Failed to start preprocessing: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
             self.process_btn.config(state='normal', text="⚙️ Process Image")
     
     def _run_preprocessing(self):
@@ -685,36 +767,45 @@ class SolarPanelDetectorGUI:
             self.root.after(0, self._preprocessing_complete)
             
         except Exception as e:
-            self.root.after(0, lambda: self._preprocessing_error(str(e)))
+            error_msg = f"Preprocessing error: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            self.root.after(0, lambda: self._preprocessing_error(error_msg))
     
     def _preprocessing_complete(self):
         """Handle preprocessing completion"""
-        self.process_btn.config(state='normal', text="⚙️ Process Image")
-        self.status_label.config(text="✅ Image preprocessing completed!")
-        
-        # Update results text
-        self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(tk.END, "✅ Image preprocessing completed!\n\n")
-        self.results_text.insert(tk.END, "📋 Preprocessing steps:\n")
-        self.results_text.insert(tk.END, "  • Image enhancement applied\n")
-        self.results_text.insert(tk.END, "  • Noise reduction completed\n")
-        self.results_text.insert(tk.END, "  • Contrast optimization done\n")
-        self.results_text.insert(tk.END, "  • Ready for detection analysis\n\n")
-        self.results_text.insert(tk.END, "Click 'Detect Issues' to analyze the preprocessed image.")
-        
-        messagebox.showinfo("Success", "Image preprocessing completed successfully!")
+        try:
+            self.process_btn.config(state='normal', text="⚙️ Process Image")
+            self.status_label.config(text="✅ Image preprocessing completed!")
+            
+            # Update results text
+            self.results_text.delete(1.0, tk.END)
+            self.results_text.insert(tk.END, "✅ Image preprocessing completed!\n\n")
+            self.results_text.insert(tk.END, "📋 Preprocessing steps:\n")
+            self.results_text.insert(tk.END, "  • Image enhancement applied\n")
+            self.results_text.insert(tk.END, "  • Noise reduction completed\n")
+            self.results_text.insert(tk.END, "  • Contrast optimization done\n")
+            self.results_text.insert(tk.END, "  • Ready for detection analysis\n\n")
+            self.results_text.insert(tk.END, "Click 'Detect Issues' to analyze the preprocessed image.")
+            
+            messagebox.showinfo("Success", "Image preprocessing completed successfully!")
+        except Exception as e:
+            print(f"❌ Error in preprocessing complete: {str(e)}")
     
     def _preprocessing_error(self, error_msg):
         """Handle preprocessing error"""
-        self.process_btn.config(state='normal', text="⚙️ Process Image")
-        self.status_label.config(text="❌ Preprocessing failed!")
-        messagebox.showerror("Preprocessing Error", f"Preprocessing failed: {error_msg}")
+        try:
+            self.process_btn.config(state='normal', text="⚙️ Process Image")
+            self.status_label.config(text="❌ Preprocessing failed!")
+            messagebox.showerror("Preprocessing Error", f"Preprocessing failed: {error_msg}")
+        except Exception as e:
+            print(f"❌ Error showing preprocessing error: {str(e)}")
     
     def batch_process(self):
         """Process multiple images in batch"""
-        folder_path = filedialog.askdirectory(title="Select folder with images to process")
-        if folder_path:
-            try:
+        try:
+            folder_path = filedialog.askdirectory(title="Select folder with images to process")
+            if folder_path:
                 # Get list of image files
                 image_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff')
                 image_files = [f for f in os.listdir(folder_path) 
@@ -727,80 +818,97 @@ class SolarPanelDetectorGUI:
                 # Show batch processing dialog
                 self._show_batch_dialog(folder_path, image_files)
                 
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to access folder: {str(e)}")
+        except Exception as e:
+            error_msg = f"Failed to access folder: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
     
     def _show_batch_dialog(self, folder_path, image_files):
         """Show batch processing configuration dialog"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Batch Processing Configuration")
-        dialog.geometry("400x300")
-        dialog.configure(bg='#ecf0f1')
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # Dialog content
-        tk.Label(dialog, text="📁 Batch Processing Setup", 
-                font=('Arial', 14, 'bold'), bg='#ecf0f1', fg='#2c3e50').pack(pady=10)
-        
-        tk.Label(dialog, text=f"Found {len(image_files)} images in:\n{folder_path}", 
-                font=('Arial', 10), bg='#ecf0f1', fg='#7f8c8d').pack(pady=5)
-        
-        # Processing options
-        options_frame = tk.Frame(dialog, bg='#ecf0f1')
-        options_frame.pack(fill='x', padx=20, pady=10)
-        
-        # Detector selection
-        tk.Label(options_frame, text="Detector:", font=('Arial', 10), 
-                bg='#ecf0f1').pack(anchor='w')
-        
-        detector_var = tk.StringVar(value="auto")
-        detector_types = [
-            ("🚀 Auto", "auto"),
-            ("⚡ YOLO", "yolo"),
-            ("☁️ Roboflow", "roboflow"),
-            ("🔀 Hybrid", "hybrid")
-        ]
-        
-        for text, value in detector_types:
-            tk.Radiobutton(options_frame, text=text, variable=detector_var, 
-                          value=value, bg='#ecf0f1', font=('Arial', 9)).pack(anchor='w')
-        
-        # Start button
-        start_btn = tk.Button(dialog, text="🚀 Start Batch Processing", 
-                             command=lambda: self._start_batch_processing(folder_path, image_files, detector_var.get(), dialog),
-                             font=('Arial', 12), bg='#27ae60', fg='white',
-                             relief='raised', padx=20, pady=10)
-        start_btn.pack(pady=20)
+        try:
+            dialog = tk.Toplevel(self.root)
+            dialog.title("Batch Processing Configuration")
+            dialog.geometry("400x300")
+            dialog.configure(bg='#ecf0f1')
+            dialog.transient(self.root)
+            dialog.grab_set()
+            
+            # Dialog content
+            tk.Label(dialog, text="📁 Batch Processing Setup", 
+                    font=('Arial', 14, 'bold'), bg='#ecf0f1', fg='#2c3e50').pack(pady=10)
+            
+            tk.Label(dialog, text=f"Found {len(image_files)} images in:\n{folder_path}", 
+                    font=('Arial', 10), bg='#ecf0f1', fg='#7f8c8d').pack(pady=5)
+            
+            # Processing options
+            options_frame = tk.Frame(dialog, bg='#ecf0f1')
+            options_frame.pack(fill='x', padx=20, pady=10)
+            
+            # Detector selection
+            tk.Label(options_frame, text="Detector:", font=('Arial', 10), 
+                    bg='#ecf0f1').pack(anchor='w')
+            
+            detector_var = tk.StringVar(value="auto")
+            detector_types = [
+                ("🚀 Auto", "auto"),
+                ("⚡ YOLO", "yolo"),
+                ("☁️ Roboflow", "roboflow"),
+                ("🔀 Hybrid", "hybrid")
+            ]
+            
+            for text, value in detector_types:
+                tk.Radiobutton(options_frame, text=text, variable=detector_var, 
+                              value=value, bg='#ecf0f1', font=('Arial', 9)).pack(anchor='w')
+            
+            # Start button
+            start_btn = tk.Button(dialog, text="🚀 Start Batch Processing", 
+                                 command=lambda: self._start_batch_processing(folder_path, image_files, detector_var.get(), dialog),
+                                 font=('Arial', 12), bg='#27ae60', fg='white',
+                                 relief='raised', padx=20, pady=10)
+            start_btn.pack(pady=20)
+            
+        except Exception as e:
+            error_msg = f"Failed to show batch dialog: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
     
     def _start_batch_processing(self, folder_path, image_files, detector_type, dialog):
         """Start batch processing of images"""
-        dialog.destroy()
-        
-        # Show progress dialog
-        progress_dialog = tk.Toplevel(self.root)
-        progress_dialog.title("Batch Processing Progress")
-        progress_dialog.geometry("400x200")
-        progress_dialog.configure(bg='#ecf0f1')
-        progress_dialog.transient(self.root)
-        progress_dialog.grab_set()
-        
-        # Progress content
-        tk.Label(progress_dialog, text="📁 Batch Processing in Progress", 
-                font=('Arial', 14, 'bold'), bg='#ecf0f1', fg='#2c3e50').pack(pady=10)
-        
-        progress_label = tk.Label(progress_dialog, text="Processing images...", 
-                                 font=('Arial', 10), bg='#ecf0f1', fg='#7f8c8d')
-        progress_label.pack(pady=5)
-        
-        progress_bar = ttk.Progressbar(progress_dialog, length=300, mode='determinate')
-        progress_bar.pack(pady=10)
-        
-        # Start batch processing in thread
-        thread = threading.Thread(target=self._run_batch_processing, 
-                                args=(folder_path, image_files, detector_type, progress_dialog, progress_label, progress_bar))
-        thread.daemon = True
-        thread.start()
+        try:
+            dialog.destroy()
+            
+            # Show progress dialog
+            progress_dialog = tk.Toplevel(self.root)
+            progress_dialog.title("Batch Processing Progress")
+            progress_dialog.geometry("400x200")
+            progress_dialog.configure(bg='#ecf0f1')
+            progress_dialog.transient(self.root)
+            progress_dialog.grab_set()
+            
+            # Progress content
+            tk.Label(progress_dialog, text="📁 Batch Processing in Progress", 
+                    font=('Arial', 14, 'bold'), bg='#ecf0f1', fg='#2c3e50').pack(pady=10)
+            
+            progress_label = tk.Label(progress_dialog, text="Processing images...", 
+                                     font=('Arial', 10), bg='#ecf0f1', fg='#7f8c8d')
+            progress_label.pack(pady=5)
+            
+            progress_bar = ttk.Progressbar(progress_dialog, length=300, mode='determinate')
+            progress_bar.pack(pady=10)
+            
+            # Start batch processing in thread
+            thread = threading.Thread(target=self._run_batch_processing, 
+                                    args=(folder_path, image_files, detector_type, progress_dialog, progress_label, progress_bar))
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            error_msg = f"Failed to start batch processing: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
     
     def _run_batch_processing(self, folder_path, image_files, detector_type, dialog, progress_label, progress_bar):
         """Run batch processing operations"""
@@ -826,32 +934,42 @@ class SolarPanelDetectorGUI:
             self.root.after(0, lambda: self._batch_processing_complete(dialog, processed, total_files))
             
         except Exception as e:
-            self.root.after(0, lambda: self._batch_processing_error(dialog, str(e)))
+            error_msg = f"Batch processing error: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            self.root.after(0, lambda: self._batch_processing_error(dialog, error_msg))
     
     def _batch_processing_complete(self, dialog, processed, total):
         """Handle batch processing completion"""
-        dialog.destroy()
-        messagebox.showinfo("Success", f"Batch processing completed!\n\nProcessed {processed}/{total} images successfully.")
-        
-        # Update main results
-        self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(tk.END, f"✅ Batch Processing Completed!\n\n")
-        self.results_text.insert(tk.END, f"📊 Results Summary:\n")
-        self.results_text.insert(tk.END, f"  • Total images: {total}\n")
-        self.results_text.insert(tk.END, f"  • Successfully processed: {processed}\n")
-        self.results_text.insert(tk.END, f"  • Failed: {total - processed}\n")
-        self.results_text.insert(tk.END, f"  • Success rate: {(processed/total)*100:.1f}%\n\n")
-        self.results_text.insert(tk.END, "Results saved to 'batch_results' folder.")
-        
-        # Enable result action buttons
-        self.save_btn.config(state='normal')
-        self.clear_btn.config(state='normal')
-        self.export_btn.config(state='normal')
+        try:
+            dialog.destroy()
+            messagebox.showinfo("Success", f"Batch processing completed!\n\nProcessed {processed}/{total} images successfully.")
+            
+            # Update main results
+            self.results_text.delete(1.0, tk.END)
+            self.results_text.insert(tk.END, f"✅ Batch Processing Completed!\n\n")
+            self.results_text.insert(tk.END, f"📊 Results Summary:\n")
+            self.results_text.insert(tk.END, f"  • Total images: {total}\n")
+            self.results_text.insert(tk.END, f"  • Successfully processed: {processed}\n")
+            self.results_text.insert(tk.END, f"  • Failed: {total - processed}\n")
+            self.results_text.insert(tk.END, f"  • Success rate: {(processed/total)*100:.1f}%\n\n")
+            self.results_text.insert(tk.END, "Results saved to 'batch_results' folder.")
+            
+            # Enable result action buttons
+            self.save_btn.config(state='normal')
+            self.clear_btn.config(state='normal')
+            self.export_btn.config(state='normal')
+            
+        except Exception as e:
+            print(f"❌ Error in batch processing complete: {str(e)}")
     
     def _batch_processing_error(self, dialog, error_msg):
         """Handle batch processing error"""
-        dialog.destroy()
-        messagebox.showerror("Batch Processing Error", f"Batch processing failed: {error_msg}")
+        try:
+            dialog.destroy()
+            messagebox.showerror("Batch Processing Error", f"Batch processing failed: {error_msg}")
+        except Exception as e:
+            print(f"❌ Error showing batch processing error: {str(e)}")
     
     def save_results(self):
         """Save current detection results"""
@@ -888,29 +1006,35 @@ class SolarPanelDetectorGUI:
             messagebox.showinfo("Success", f"Results saved successfully!\n\nFile: {filename}\nLocation: {results_folder}")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save results: {str(e)}")
+            error_msg = f"Failed to save results: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
     
     def clear_results(self):
         """Clear current detection results"""
-        if messagebox.askyesno("Confirm", "Are you sure you want to clear all results?"):
-            self.detection_results = []
-            self.results_text.delete(1.0, tk.END)
-            self.results_text.insert(tk.END, "Results cleared. Upload a new image to start detection.")
-            
-            # Disable result action buttons
-            self.save_btn.config(state='disabled')
-            self.clear_btn.config(state='disabled')
-            self.export_btn.config(state='disabled')
-            
-            # Clear image display
-            self.canvas.delete("all")
-            self.canvas.create_text(
-                self.canvas.winfo_width() // 2,
-                self.canvas.winfo_height() // 2,
-                text="No image displayed\nUpload an image to begin",
-                font=('Arial', 14),
-                fill='#bdc3c7'
-            )
+        try:
+            if messagebox.askyesno("Confirm", "Are you sure you want to clear all results?"):
+                self.detection_results = []
+                self.results_text.delete(1.0, tk.END)
+                self.results_text.insert(tk.END, "Results cleared. Upload a new image to start detection.")
+                
+                # Disable result action buttons
+                self.save_btn.config(state='disabled')
+                self.clear_btn.config(state='disabled')
+                self.export_btn.config(state='disabled')
+                
+                # Clear image display
+                self.canvas.delete("all")
+                self.canvas.create_text(
+                    self.canvas_width // 2,
+                    self.canvas_height // 2,
+                    text="No image displayed\nUpload an image to begin",
+                    font=('Arial', 14),
+                    fill='#bdc3c7'
+                )
+        except Exception as e:
+            print(f"❌ Error clearing results: {str(e)}")
     
     def export_results(self):
         """Export results in different formats"""
@@ -970,18 +1094,36 @@ class SolarPanelDetectorGUI:
             messagebox.showinfo("Success", f"Results exported successfully!\n\nFiles created:\n• {csv_filename}\n• {txt_filename}\n\nLocation: {export_folder}")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to export results: {str(e)}")
+            error_msg = f"Failed to export results: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", error_msg)
 
 def main():
     """Main function to run the GUI"""
-    root = tk.Tk()
-    app = SolarPanelDetectorGUI(root)
-    
-    # Configure window
-    root.protocol("WM_DELETE_WINDOW", root.quit)
-    
-    # Start the GUI
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = SolarPanelDetectorGUI(root)
+        
+        # Configure window
+        root.protocol("WM_DELETE_WINDOW", root.quit)
+        
+        # Start the GUI
+        root.mainloop()
+        
+    except Exception as e:
+        error_msg = f"Failed to start GUI: {str(e)}"
+        print(f"❌ {error_msg}")
+        print(f"Traceback: {traceback.format_exc()}")
+        
+        # Try to show error in a simple way
+        try:
+            import tkinter.messagebox as msgbox
+            msgbox.showerror("Critical Error", f"Failed to start Solar Panel Detection GUI:\n\n{error_msg}\n\nPlease check the console for more details.")
+        except:
+            print("Could not display error dialog. Check console output above.")
+        
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
