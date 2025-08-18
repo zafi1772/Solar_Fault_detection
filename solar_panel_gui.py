@@ -24,12 +24,49 @@ class SolarPanelDetectorGUI:
         self.current_image = None
         self.detection_results = []
         
-        # Initialize Roboflow detector
+        # Initialize detectors
+        self.detector = None
+        self.detector_type = "roboflow"  # Default detector
+        
+        # Try to initialize Roboflow detector
         try:
-            self.detector = RoboflowSolarDetector()
+            from roboflow_detector import RoboflowSolarDetector
+            self.roboflow_detector = RoboflowSolarDetector()
             print("✅ Roboflow detector initialized successfully!")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to initialize Roboflow detector: {str(e)}")
+            print(f"⚠️ Roboflow detector not available: {str(e)}")
+            self.roboflow_detector = None
+        
+        # Try to initialize YOLO detector
+        try:
+            from yolo_detector import YOLOSolarDetector
+            self.yolo_detector = YOLOSolarDetector()
+            print("✅ YOLO detector initialized successfully!")
+        except Exception as e:
+            print(f"⚠️ YOLO detector not available: {str(e)}")
+            self.yolo_detector = None
+        
+        # Try to initialize Hybrid detector
+        try:
+            from hybrid_detector import HybridSolarDetector
+            self.hybrid_detector = HybridSolarDetector()
+            print("✅ Hybrid detector initialized successfully!")
+        except Exception as e:
+            print(f"⚠️ Hybrid detector not available: {str(e)}")
+            self.hybrid_detector = None
+        
+        # Set default detector
+        if self.hybrid_detector:
+            self.detector = self.hybrid_detector
+            self.detector_type = "hybrid"
+        elif self.yolo_detector:
+            self.detector = self.yolo_detector
+            self.detector_type = "yolo"
+        elif self.roboflow_detector:
+            self.detector = self.roboflow_detector
+            self.detector_type = "roboflow"
+        else:
+            messagebox.showerror("Error", "No detectors available! Please check your setup.")
             self.detector = None
         
         self.setup_ui()
@@ -77,8 +114,25 @@ class SolarPanelDetectorGUI:
                                       font=('Arial', 12, 'bold'), bg='#ecf0f1', fg='#2c3e50')
         detection_frame.pack(fill='x', padx=10, pady=10)
         
+        # Detector selection
+        tk.Label(detection_frame, text="Detector Type:", font=('Arial', 10), 
+                bg='#ecf0f1').pack(anchor='w', padx=10, pady=5)
+        
+        self.detector_type_var = tk.StringVar(value="auto")
+        detector_types = [
+            ("🚀 Auto (Best Available)", "auto"),
+            ("🔀 Hybrid (YOLO + Roboflow)", "hybrid"),
+            ("⚡ YOLO (Local)", "yolo"),
+            ("☁️ Roboflow (Cloud)", "roboflow")
+        ]
+        
+        for text, value in detector_types:
+            tk.Radiobutton(detection_frame, text=text, variable=self.detector_type_var, 
+                          value=value, bg='#ecf0f1', font=('Arial', 10),
+                          command=self.update_detector_indicator).pack(anchor='w', padx=20)
+        
         # Detection type selection
-        tk.Label(detection_frame, text="Detection Type:", font=('Arial', 10), 
+        tk.Label(detection_frame, text="Analysis Type:", font=('Arial', 10), 
                 bg='#ecf0f1').pack(anchor='w', padx=10, pady=5)
         
         self.detection_type = tk.StringVar(value="combined")
@@ -151,6 +205,11 @@ class SolarPanelDetectorGUI:
                                   font=('Arial', 9), fg='#bdc3c7', bg='#34495e')
         self.mode_label.pack(side='right', padx=10, pady=5)
         
+        # Detector type indicator
+        self.detector_label = tk.Label(status_frame, text="Detector: Auto", 
+                                      font=('Arial', 9), fg='#bdc3c7', bg='#34495e')
+        self.detector_label.pack(side='right', padx=(0, 10), pady=5)
+        
     def upload_image(self):
         """Handle image upload"""
         file_path = filedialog.askopenfilename(
@@ -214,6 +273,18 @@ class SolarPanelDetectorGUI:
         else:
             self.mode_label.config(text="Mode: 🔍 Combined Analysis")
     
+    def update_detector_indicator(self):
+        """Update the detector type indicator"""
+        detector = self.detector_type_var.get()
+        if detector == "auto":
+            self.detector_label.config(text="Detector: 🚀 Auto")
+        elif detector == "hybrid":
+            self.detector_label.config(text="Detector: 🔀 Hybrid")
+        elif detector == "yolo":
+            self.detector_label.config(text="Detector: ⚡ YOLO")
+        else:
+            self.detector_label.config(text="Detector: ☁️ Roboflow")
+    
     def load_and_display_image(self, image_path):
         """Load and display image on canvas"""
         # Load image
@@ -253,7 +324,17 @@ class SolarPanelDetectorGUI:
         
         # Disable detect button during processing
         self.detect_btn.config(state='disabled', text="🔍 Processing...")
-        self.status_label.config(text="🔍 Running Roboflow API analysis...")
+        
+        # Update status based on selected detector
+        detector_type = self.detector_type_var.get()
+        if detector_type == "yolo":
+            self.status_label.config(text="🔍 Running YOLO local inference...")
+        elif detector_type == "roboflow":
+            self.status_label.config(text="🔍 Running Roboflow cloud analysis...")
+        elif detector_type == "hybrid":
+            self.status_label.config(text="🔍 Running hybrid detection...")
+        else:
+            self.status_label.config(text="🔍 Running automatic detection...")
         
         # Run detection in separate thread to avoid freezing GUI
         thread = threading.Thread(target=self.run_detection)
@@ -261,29 +342,65 @@ class SolarPanelDetectorGUI:
         thread.start()
     
     def run_detection(self):
-        """Run the detection algorithm using real Roboflow API"""
+        """Run the detection algorithm using selected detector"""
         try:
             if not self.detector:
-                raise Exception("Roboflow detector not initialized")
+                raise Exception("No detector available")
             
-            # Get detection type and confidence
+            # Get detection parameters
             detection_type = self.detection_type.get()
-            confidence = int(self.confidence_var.get() * 100)  # Convert to percentage
+            detector_type = self.detector_type_var.get()
+            confidence = self.confidence_var.get()  # Keep as float (0.0-1.0)
             
-            print(f"🔍 Running {detection_type} detection with {confidence}% confidence...")
+            print(f"🔍 Running {detection_type} detection with {detector_type} detector at {confidence:.1%} confidence...")
             
-            # Run real Roboflow detection
-            thermal_result, fault_result = self.detector.analyze_image(self.current_image_path)
+            # Update status based on detector type
+            if detector_type == "yolo":
+                self.status_label.config(text="🔍 Running YOLO local inference...")
+            elif detector_type == "roboflow":
+                self.status_label.config(text="🔍 Running Roboflow cloud analysis...")
+            elif detector_type == "hybrid":
+                self.status_label.config(text="🔍 Running hybrid detection (YOLO + Roboflow)...")
+            else:
+                self.status_label.config(text="🔍 Running automatic detection...")
             
-            # Process results based on detection type
-            if detection_type == "thermal":
-                self.detection_results = self.process_roboflow_results(thermal_result, confidence, "thermal")
-            elif detection_type == "fault":
-                self.detection_results = self.process_roboflow_results(fault_result, confidence, "fault")
-            else:  # combined
-                thermal_detections = self.process_roboflow_results(thermal_result, confidence, "thermal")
-                fault_detections = self.process_roboflow_results(fault_result, confidence, "fault")
-                self.detection_results = thermal_detections + fault_detections
+            # Run detection based on detector type
+            if detector_type == "yolo" and self.yolo_detector:
+                result = self.yolo_detector.analyze_image(self.current_image_path, confidence)
+                self.detection_results = result.get('detections', [])
+            elif detector_type == "roboflow" and self.roboflow_detector:
+                thermal_result, fault_result = self.roboflow_detector.analyze_image(self.current_image_path)
+                # Process results based on detection type
+                if detection_type == "thermal":
+                    self.detection_results = self.process_roboflow_results(thermal_result, confidence, "thermal")
+                elif detection_type == "fault":
+                    self.detection_results = self.process_roboflow_results(fault_result, confidence, "fault")
+                else:  # combined
+                    thermal_detections = self.process_roboflow_results(thermal_result, confidence, "thermal")
+                    fault_detections = self.process_roboflow_results(fault_result, confidence, "fault")
+                    self.detection_results = thermal_detections + fault_detections
+            elif detector_type == "hybrid" and self.hybrid_detector:
+                result = self.hybrid_detector.analyze_image(self.current_image_path, method="hybrid", confidence=confidence)
+                self.detection_results = result.get('detections', [])
+            else:  # auto - use best available
+                if self.hybrid_detector:
+                    result = self.hybrid_detector.analyze_image(self.current_image_path, method="auto", confidence=confidence)
+                    self.detection_results = result.get('detections', [])
+                elif self.yolo_detector:
+                    result = self.yolo_detector.analyze_image(self.current_image_path, confidence)
+                    self.detection_results = result.get('detections', [])
+                elif self.roboflow_detector:
+                    thermal_result, fault_result = self.roboflow_detector.analyze_image(self.current_image_path)
+                    if detection_type == "thermal":
+                        self.detection_results = self.process_roboflow_results(thermal_result, confidence, "thermal")
+                    elif detection_type == "fault":
+                        self.detection_results = self.process_roboflow_results(fault_result, confidence, "fault")
+                    else:  # combined
+                        thermal_detections = self.process_roboflow_results(thermal_result, confidence, "thermal")
+                        fault_detections = self.process_roboflow_results(fault_result, confidence, "fault")
+                        self.detection_results = thermal_detections + fault_detections
+                else:
+                    raise Exception("No detectors available")
             
             # Update GUI in main thread
             self.root.after(0, self.update_detection_results)
